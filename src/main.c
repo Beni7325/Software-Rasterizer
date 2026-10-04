@@ -1,83 +1,14 @@
-#include <SDL2/SDL.h>
-#include <cglm/struct.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
+#include <SDL2/SDL.h>
+
+#include "framebuffer.h"
+#include "mesh.h"
+#include "renderer.h"
 
 #define WIDTH  256
 #define HEIGHT 256
 
-
-static inline uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8) | a;
-}
-
-static void fill_solid(uint32_t *pixels, uint32_t color) {
-    for (int i = 0; i < WIDTH * HEIGHT; i++) {
-        pixels[i] = color;
-    }
-}
-
-float edge(vec2s a, vec2s b, vec2s p) {
-
-    vec2s ab = glms_vec2_sub(b, a);
-    vec2s ap = glms_vec2_sub(p, a);
-
-    return glms_vec2_cross(ab, ap);
-}
-
-// TODO: Implement top-left rule
-void rasterize_triangle(uint32_t *framebuffer, vec2s a, vec2s b, vec2s c, vec3s color_a, vec3s color_b, vec3s color_c) {
-
-    float double_area = edge(a, b, c);
-    if (double_area == 0) {
-        return;
-    } else if (double_area < 0) {
-        vec2s tmp_v = b; b = c; c = tmp_v;
-        vec3s tmp_c = color_b; color_b = color_c; color_c = tmp_c;
-        double_area = -double_area;
-    }
-
-    mat3s colors = {.col = {color_a, color_b, color_c}};
-
-    // Triangle bounding box
-    vec2s bb_min = glms_vec2_minv(a, glms_vec2_minv(b, c));
-    vec2s bb_max = glms_vec2_maxv(a, glms_vec2_maxv(b, c));
-
-    // Clamp to the framebuffer
-    vec2s screen_min = {.x = 0, .y = 0 };
-    vec2s screen_max = {.x = WIDTH - 1.0f, .y = HEIGHT - 1.0f};
-
-    bb_min = glms_vec2_maxv(bb_min, screen_min);
-    bb_max = glms_vec2_minv(bb_max, screen_max);
-
-    // Pixel range covered by the box
-    // TODO: Tighten to pixel centers
-    ivec2s px_min = {.x = (int)floorf(bb_min.x), .y = (int)floorf(bb_min.y)};
-    ivec2s px_max = {.x = (int)ceilf(bb_max.x),  .y = (int)ceilf(bb_max.y)};
-
-    for (int y = px_min.y; y <= px_max.y; ++y) {
-        for (int x = px_min.x; x <= px_max.x; ++x) {
-
-            // Sample at pixel center
-            vec2s p = {.x = x + 0.5f, .y = y + 0.5f};
-            vec3s w = {
-                .x = edge(b, c, p),
-                .y = edge(c, a, p),
-                .z = edge(a, b, p),
-            };
-
-            if (w.x >= 0 && w.y >= 0 && w.z >= 0) {
-
-                // Interpolate
-                vec3s l = glms_vec3_divs(w, double_area);
-                vec3s color = glms_mat3_mulv(colors, l);
-
-                framebuffer[y * WIDTH + x] = rgba((uint8_t)color.r, (uint8_t)color.g, (uint8_t)color.b, 255);
-            }
-        }
-    }
-}
 
 int main(void) {
 
@@ -89,20 +20,39 @@ int main(void) {
     SDL_Window *window = SDL_CreateWindow("rasterizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC) : NULL;
     SDL_Texture *texture = renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT) : NULL;
-    uint32_t *framebuffer = malloc(sizeof(uint32_t) * WIDTH * HEIGHT);
-    if (!texture || !framebuffer) {
+    if (!texture) {
         fprintf(stderr, "setup failed: %s\n", SDL_GetError());
         return 1;
     }
 
-    vec2s a = {.x = 128.0f, .y =  56.0f};
-    vec2s b = {.x =  32.0f, .y = 224.0f};
-    vec2s c = {.x = 224.0f, .y = 224.0f};
-    vec3s color_a = {.r = 255, .g =   0, .b =   0};
-    vec3s color_b = {.r =   0, .g = 255, .b =   0};
-    vec3s color_c = {.r =   0, .g =   0, .b = 255};
+    FrameBuffer fb = {0};
+    if (!framebuffer_init(&fb, WIDTH, HEIGHT)) {
+        fprintf(stderr, "Error initializing the framebuffer: %s\n", SDL_GetError());
+        // TODO: Free SDL
+        return 1;
+    }
 
-    const uint32_t sky = rgba(135, 206, 235, 255);
+    // Smaller z = closer to the camera
+    Vertex vertices[] = {
+        // Solid white, in front of the gradient triangle but submitted before it
+        {.pos = {.x =  96.0f, .y =  96.0f, .z = 0.25f}, .color = {.r = 255, .g = 255, .b = 255}},
+        {.pos = {.x =  48.0f, .y = 224.0f, .z = 0.25f}, .color = {.r = 255, .g = 255, .b = 255}},
+        {.pos = {.x = 160.0f, .y = 224.0f, .z = 0.25f}, .color = {.r = 255, .g = 255, .b = 255}},
+
+        // Gradient
+        {.pos = {.x =  72.0f, .y =  32.0f, .z = 0.5f}, .color = {.r = 255, .g =   0, .b =   0}},
+        {.pos = {.x =  16.0f, .y = 160.0f, .z = 0.5f}, .color = {.r =   0, .g = 255, .b =   0}},
+        {.pos = {.x = 128.0f, .y = 160.0f, .z = 0.5f}, .color = {.r =   0, .g =   0, .b = 255}},
+
+        // Solid orange, no overlap with the others
+        {.pos = {.x = 200.0f, .y =  32.0f, .z = 0.5f}, .color = {.r = 255, .g = 128, .b =   0}},
+        {.pos = {.x = 160.0f, .y = 112.0f, .z = 0.5f}, .color = {.r = 255, .g = 128, .b =   0}},
+        {.pos = {.x = 240.0f, .y = 112.0f, .z = 0.5f}, .color = {.r = 255, .g = 128, .b =   0}},
+    };
+    Mesh scene = {
+        .vertex_count = sizeof(vertices) / sizeof(vertices[0]),
+        .vertex_buffer = vertices,
+    };
 
     int running = 1;
     while (running) {
@@ -114,16 +64,16 @@ int main(void) {
             }
         }
 
-        fill_solid(framebuffer, sky);
-        rasterize_triangle(framebuffer, a, b, c, color_a, color_b, color_c);
+        framebuffer_clear(&fb);
+        draw_call(&fb, &scene);
 
-        SDL_UpdateTexture(texture, NULL, framebuffer, WIDTH * sizeof(uint32_t));
+        SDL_UpdateTexture(texture, NULL, fb.color_buffer, WIDTH * sizeof(uint32_t));
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
     }
 
-    free(framebuffer);
+    framebuffer_free(&fb);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

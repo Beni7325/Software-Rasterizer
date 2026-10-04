@@ -20,7 +20,7 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c)
 
 add_executable(rasterizer ${SOURCES})
 
-target_include_directories(rasterizer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(rasterizer PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 # cglm is used header-only; SYSTEM suppresses warnings from its headers
 target_include_directories(rasterizer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/vendor/cglm/include)
