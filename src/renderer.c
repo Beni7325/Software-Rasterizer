@@ -30,6 +30,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
 
     mat3s colors = {.col = {v0->v.color, v1->v.color, v2->v.color}};
     vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
+    vec3s inv_ws = {.x = v0->screen.w, .y = v1->screen.w, .z = v2->screen.w};
 
     // Triangle bounding box
     vec2s bb_min = glms_vec2_minv(a, glms_vec2_minv(b, c));
@@ -62,7 +63,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
 
             if (w.x >= 0 && w.y >= 0 && w.z >= 0) {
 
-                // Interpolate
+                // Interpolate depth (NDC depth is affine in screen space)
                 vec3s l = glms_vec3_divs(w, double_area);
                 float depth = glms_vec3_dot(depths, l);
 
@@ -70,7 +71,12 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
                 if (depth < fb->depth_buffer[idx]) {
                     fb->depth_buffer[idx] = depth;
 
-                    interpolated_varyings.color = glms_mat3_mulv(colors, l);
+                    // Perspective-correct interpolation of varyings
+                    vec3s l_over_w = glms_vec3_mul(l, inv_ws);
+                    float inv_w = glms_vec3_hadd(l_over_w);
+                    vec3s l_persp = glms_vec3_divs(l_over_w, inv_w);
+
+                    interpolated_varyings.color = glms_mat3_mulv(colors, l_persp);
                     fb->color_buffer[idx] = fragment_shader(&interpolated_varyings);
                 }
             }
