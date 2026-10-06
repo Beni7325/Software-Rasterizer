@@ -42,5 +42,11 @@ void framebuffer_free(FrameBuffer *fb) {
 }
 
 void framebuffer_clear(FrameBuffer *fb) {
+
     memset(fb->color_buffer, 0, fb->width * fb->height * sizeof(uint32_t));
+
+    size_t pixel_count = fb->width * fb->height;
+    for (size_t i = 0; i < pixel_count; ++i) {
+        fb->depth_buffer[i] = 1.0f;
+    }
 }

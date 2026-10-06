@@ -30,7 +30,7 @@ target_link_libraries(rasterizer PRIVATE SDL2::SDL2 m)
 target_compile_options(rasterizer PRIVATE
     -Wall -Wextra -Wpedantic
     $<$<CONFIG:Debug>:-g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer>
-    $<$<CONFIG:Release>:-O2>
+    $<$<CONFIG:Release>:-O3>
 )
 
 target_link_options(rasterizer PRIVATE

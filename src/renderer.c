@@ -29,6 +29,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     }
 
     mat3s colors = {.col = {v0->v.color, v1->v.color, v2->v.color}};
+    vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
 
     // Triangle bounding box
     vec2s bb_min = glms_vec2_minv(a, glms_vec2_minv(b, c));
@@ -63,9 +64,15 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
 
                 // Interpolate
                 vec3s l = glms_vec3_divs(w, double_area);
-                interpolated_varyings.color = glms_mat3_mulv(colors, l);
+                float depth = glms_vec3_dot(depths, l);
 
-                fb->color_buffer[y * fb->width + x] = fragment_shader(&interpolated_varyings);
+                int idx = y * fb->width + x;
+                if (depth < fb->depth_buffer[idx]) {
+                    fb->depth_buffer[idx] = depth;
+
+                    interpolated_varyings.color = glms_mat3_mulv(colors, l);
+                    fb->color_buffer[idx] = fragment_shader(&interpolated_varyings);
+                }
             }
         }
     }
