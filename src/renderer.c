@@ -2,7 +2,6 @@
 
 #include <math.h>
 #include <stdlib.h>
-#include "shader.h"
 
 
 static float edge(vec2s a, vec2s b, vec2s p) {
@@ -16,9 +15,9 @@ static float edge(vec2s a, vec2s b, vec2s p) {
 // TODO: Implement top-left rule
 static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2) {
 
-    vec2s a = {.x = v0->clip.x, .y = v0->clip.y};
-    vec2s b = {.x = v1->clip.x, .y = v1->clip.y};
-    vec2s c = {.x = v2->clip.x, .y = v2->clip.y};
+    vec2s a = {.x = v0->screen.x, .y = v0->screen.y};
+    vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
+    vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
 
     float double_area = edge(a, b, c);
     if (double_area == 0) {
@@ -72,7 +71,24 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     }
 }
 
-void draw_call(FrameBuffer *fb, Mesh *mesh) {
+static vec4s clip_to_screen(const FrameBuffer *fb, vec4s clip) {
+
+    float inv_w = 1.0f / clip.w;
+    vec3s clip_xyz = glms_vec3(clip);
+    vec3s ndc = glms_vec3_scale(clip_xyz, inv_w);
+
+    // NDC y points up, framebuffer rows go down
+    vec4s screen = {
+        .x = (ndc.x + 1.0f) * 0.5f * fb->width,
+        .y = (1.0f - ndc.y) * 0.5f * fb->height,
+        .z = ndc.z,
+        .w = inv_w,
+    };
+
+    return screen;
+}
+
+void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
 
     // TODO: Use some kind of arena to avoid calling malloc each time
     VertexShaderOutput *v_out = malloc(sizeof(VertexShaderOutput) * mesh->vertex_count);
@@ -81,7 +97,11 @@ void draw_call(FrameBuffer *fb, Mesh *mesh) {
     }
 
     for (size_t i = 0; i < mesh->vertex_count; ++i) {
-        vertex_shader(&mesh->vertex_buffer[i], &v_out[i]);
+        vertex_shader(&mesh->vertex_buffer[i], uniforms, &v_out[i]);
+    }
+
+    for (size_t i = 0; i < mesh->vertex_count; ++i) {
+        v_out[i].screen = clip_to_screen(fb, v_out[i].clip);
     }
 
     size_t triangle_count = mesh->vertex_count / 3;
@@ -90,4 +110,12 @@ void draw_call(FrameBuffer *fb, Mesh *mesh) {
     }
 
     free(v_out);
+}
+
+void draw_model(FrameBuffer *fb, const Model *model, const Camera *camera) {
+
+    mat4s model_mat = model_matrix(model);
+    Uniforms uniforms = {.mvp = glms_mat4_mul(camera->view_projection, model_mat)};
+
+    draw_mesh(fb, model->mesh, &uniforms);
 }

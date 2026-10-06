@@ -12,10 +12,15 @@ typedef struct {
 
 typedef struct {
     vec4s clip;
-    Varyings v; 
+    vec4s screen;
+    Varyings v;
 } VertexShaderOutput;
 
-void vertex_shader(const Vertex *in, VertexShaderOutput *out);
+typedef struct {
+    mat4s mvp;
+} Uniforms;
+
+void vertex_shader(const Vertex *in, const Uniforms *u, VertexShaderOutput *out);
 uint32_t fragment_shader(const Varyings *v);
 
 #endif /* SHADER_H */
