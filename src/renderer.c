@@ -166,14 +166,14 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         vertex_shader(&mesh->vertex_buffer[i], uniforms, &v_out[i]);
     }
 
-    size_t triangle_count = mesh->vertex_count / 3;
-    for (size_t i = 0; i < triangle_count; ++i) {
+    // Step one triangle (3 indices) at a time
+    for (size_t i = 0; i + 2 < mesh->index_count; i += 3) {
 
         // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
         // Reverse the order here so front faces end up with positive screen area
-        const VertexShaderOutput *v0 = &v_out[3 * i];
-        const VertexShaderOutput *v1 = &v_out[3 * i + 2];
-        const VertexShaderOutput *v2 = &v_out[3 * i + 1];
+        const VertexShaderOutput *v0 = &v_out[mesh->index_buffer[i]];
+        const VertexShaderOutput *v1 = &v_out[mesh->index_buffer[i + 2]];
+        const VertexShaderOutput *v2 = &v_out[mesh->index_buffer[i + 1]];
 
         VertexShaderOutput clipped[MAX_CLIPPED_VERTICES];
         int clipped_count = clip_triangle_near(v0, v1, v2, clipped);

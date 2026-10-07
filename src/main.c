@@ -13,6 +13,21 @@
 #define HEIGHT 720
 
 
+void sdl_free(SDL_Window *window, SDL_Renderer *renderer, SDL_Texture *texture) {
+
+    if (texture) {
+        SDL_DestroyTexture(texture);
+    }
+    if (renderer) {
+        SDL_DestroyRenderer(renderer);
+    }
+    if (window) {
+        SDL_DestroyWindow(window);
+    }
+
+    SDL_Quit();
+}
+
 int main(void) {
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -25,13 +40,14 @@ int main(void) {
     SDL_Texture *texture = renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT) : NULL;
     if (!texture) {
         fprintf(stderr, "setup failed: %s\n", SDL_GetError());
+        sdl_free(window, renderer, texture);
         return 1;
     }
 
     FrameBuffer fb = {0};
     if (!framebuffer_init(&fb, WIDTH, HEIGHT)) {
         fprintf(stderr, "Error initializing the framebuffer: %s\n", SDL_GetError());
-        // TODO: Free SDL
+        sdl_free(window, renderer, texture);
         return 1;
     }
 
@@ -44,37 +60,57 @@ int main(void) {
     const vec3s rtb = {.x =  0.5f, .y =  0.5f, .z = -0.5f};
     const vec3s ltb = {.x = -0.5f, .y =  0.5f, .z = -0.5f};
 
+    const vec3s black   = {.r =   0, .g =   0, .b =   0};
     const vec3s red     = {.r = 255, .g =   0, .b =   0};
     const vec3s green   = {.r =   0, .g = 255, .b =   0};
     const vec3s blue    = {.r =   0, .g =   0, .b = 255};
     const vec3s yellow  = {.r = 255, .g = 255, .b =   0};
     const vec3s magenta = {.r = 255, .g =   0, .b = 255};
     const vec3s cyan    = {.r =   0, .g = 255, .b = 255};
+    const vec3s white   = {.r = 255, .g = 255, .b = 255};
 
-    Vertex vertices[] = {
-        // Front (+z)
-        {.pos = lbf, .color = red},     {.pos = rbf, .color = red},     {.pos = rtf, .color = red},
-        {.pos = lbf, .color = red},     {.pos = rtf, .color = red},     {.pos = ltf, .color = red},
-        // Back (-z)
-        {.pos = rbb, .color = green},   {.pos = lbb, .color = green},   {.pos = ltb, .color = green},
-        {.pos = rbb, .color = green},   {.pos = ltb, .color = green},   {.pos = rtb, .color = green},
-        // Right (+x)
-        {.pos = rbf, .color = blue},    {.pos = rbb, .color = blue},    {.pos = rtb, .color = blue},
-        {.pos = rbf, .color = blue},    {.pos = rtb, .color = blue},    {.pos = rtf, .color = blue},
-        // Left (-x)
-        {.pos = lbb, .color = yellow},  {.pos = lbf, .color = yellow},  {.pos = ltf, .color = yellow},
-        {.pos = lbb, .color = yellow},  {.pos = ltf, .color = yellow},  {.pos = ltb, .color = yellow},
-        // Top (+y)
-        {.pos = ltf, .color = magenta}, {.pos = rtf, .color = magenta}, {.pos = rtb, .color = magenta},
-        {.pos = ltf, .color = magenta}, {.pos = rtb, .color = magenta}, {.pos = ltb, .color = magenta},
-        // Bottom (-y)
-        {.pos = lbb, .color = cyan},    {.pos = rbb, .color = cyan},    {.pos = rbf, .color = cyan},
-        {.pos = lbb, .color = cyan},    {.pos = rbf, .color = cyan},    {.pos = lbf, .color = cyan},
+    // One vertex per corner, colored as an RGB cube: x -> red, y -> green, z -> blue.
+    // Corners are shared between faces, so colors blend across each face
+    enum { LBB, RBB, LTB, RTB, LBF, RBF, LTF, RTF };
+
+    const Vertex vertices[] = {
+        [LBB] = {.pos = lbb, .color = black},
+        [RBB] = {.pos = rbb, .color = red},
+        [LTB] = {.pos = ltb, .color = green},
+        [RTB] = {.pos = rtb, .color = yellow},
+        [LBF] = {.pos = lbf, .color = blue},
+        [RBF] = {.pos = rbf, .color = magenta},
+        [LTF] = {.pos = ltf, .color = cyan},
+        [RTF] = {.pos = rtf, .color = white},
     };
+
+    // Counter clockwise when seen from outside the cube
+    const uint32_t indices[] = {
+        // Front (+z)
+        LBF, RBF, RTF,   LBF, RTF, LTF,
+        // Back (-z)
+        RBB, LBB, LTB,   RBB, LTB, RTB,
+        // Right (+x)
+        RBF, RBB, RTB,   RBF, RTB, RTF,
+        // Left (-x)
+        LBB, LBF, LTF,   LBB, LTF, LTB,
+        // Top (+y)
+        LTF, RTF, RTB,   LTF, RTB, LTB,
+        // Bottom (-y)
+        LBB, RBB, RBF,   LBB, RBF, LBF,
+    };
+
     Mesh scene = {
         .vertex_count = sizeof(vertices) / sizeof(vertices[0]),
+        .index_count = sizeof(indices) / sizeof(indices[0]),
         .vertex_buffer = vertices,
+        .index_buffer = indices,
     };
+    if (!mesh_validate(&scene)) {
+        framebuffer_free(&fb);
+        sdl_free(window, renderer, texture);
+        return 1;
+    }
 
     Model model = model_create(&scene);
     vec3s model_rotation = {.y = glm_rad(45.0f)};
@@ -120,10 +156,7 @@ int main(void) {
     }
 
     framebuffer_free(&fb);
-    SDL_DestroyTexture(texture);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    sdl_free(window, renderer, texture);
 
     return 0;
 }

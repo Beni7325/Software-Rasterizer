@@ -1,7 +1,9 @@
 #ifndef MESH_H
 #define MESH_H
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <cglm/struct.h>
 
@@ -13,7 +15,11 @@ typedef struct {
 
 typedef struct {
     size_t vertex_count;
-    Vertex *vertex_buffer;
+    size_t index_count;
+    const Vertex *vertex_buffer;
+    const uint32_t *index_buffer;
 } Mesh;
+
+bool mesh_validate(const Mesh *mesh);
 
 #endif /* MESH_H */
