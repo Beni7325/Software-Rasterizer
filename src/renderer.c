@@ -20,13 +20,6 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
 
     float double_area = edge(a, b, c);
-    if (double_area == 0) {
-        return;
-    } else if (double_area < 0) {
-        vec2s tmp_v = b; b = c; c = tmp_v;
-        const VertexShaderOutput *tmp_p = v1; v1 = v2; v2 = tmp_p;
-        double_area = -double_area;
-    }
 
     mat3s colors = {.col = {v0->v.color, v1->v.color, v2->v.color}};
     vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
@@ -101,6 +94,66 @@ static vec4s clip_to_screen(const FrameBuffer *fb, vec4s clip) {
     return screen;
 }
 
+// Signed distance to the near plane in clip space, >= 0 means inside
+float near_plane_distance(vec4s clip) {
+    return clip.w + clip.z;
+}
+
+// Clipping one plane can add at most one vertex: 3 + 1
+#define MAX_CLIPPED_VERTICES 4
+
+// Clips a triangle against the near plane only, in clip space
+// Writes the resulting convex polygon to out and returns its vertex count
+int clip_triangle_near(const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, VertexShaderOutput out[MAX_CLIPPED_VERTICES]) {
+
+    const VertexShaderOutput *in[3] = {v0, v1, v2};
+    int out_count = 0;
+
+    for (int i = 0; i < 3; ++i) {
+
+        const VertexShaderOutput *curr = in[i];
+        const VertexShaderOutput *next = in[(i + 1) % 3];
+
+        float d_curr = near_plane_distance(curr->clip);
+        float d_next = near_plane_distance(next->clip);
+
+        if (d_curr >= 0) {
+            out[out_count++] = *curr;
+        }
+
+        if ((d_curr >= 0) != (d_next >= 0)) {
+            // Edge crosses the plane, emit the intersection
+            float t = d_curr / (d_curr - d_next);
+
+            VertexShaderOutput intersection;
+            intersection.clip = glms_vec4_lerp(curr->clip, next->clip, t);
+            intersection.v.color = glms_vec3_lerp(curr->v.color, next->v.color, t);
+
+            out[out_count++] = intersection;
+        }
+    }
+
+    return out_count;
+}
+
+#define DEGENERATE_DOUBLE_AREA 1e-6f
+
+bool setup_triangle(const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2) {
+
+    vec2s a = {.x = v0->screen.x, .y = v0->screen.y};
+    vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
+    vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
+
+    float double_area = edge(a, b, c);
+
+    // Cull back faces (negative area) and degenerate triangles (zero or near zero arear)
+    if (double_area < DEGENERATE_DOUBLE_AREA) {
+        return false;
+    }
+
+    return true;
+}
+
 void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
 
     // TODO: Use some kind of arena to avoid calling malloc each time
@@ -113,13 +166,34 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         vertex_shader(&mesh->vertex_buffer[i], uniforms, &v_out[i]);
     }
 
-    for (size_t i = 0; i < mesh->vertex_count; ++i) {
-        v_out[i].screen = clip_to_screen(fb, v_out[i].clip);
-    }
-
     size_t triangle_count = mesh->vertex_count / 3;
     for (size_t i = 0; i < triangle_count; ++i) {
-        rasterize_triangle(fb, &v_out[3 * i], &v_out[3 * i + 1], &v_out[3 * i + 2]);
+
+        // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
+        // Reverse the order here so front faces end up with positive screen area
+        const VertexShaderOutput *v0 = &v_out[3 * i];
+        const VertexShaderOutput *v1 = &v_out[3 * i + 2];
+        const VertexShaderOutput *v2 = &v_out[3 * i + 1];
+
+        VertexShaderOutput clipped[MAX_CLIPPED_VERTICES];
+        int clipped_count = clip_triangle_near(v0, v1, v2, clipped);
+
+        // Clipping creates new vertices, so the divide has to happen after it
+        for (int j = 0; j < clipped_count; ++j) {
+            clipped[j].screen = clip_to_screen(fb, clipped[j].clip);
+        }
+
+        // Fan triangulate the clipped polygon
+        for (int j = 1; j + 1 < clipped_count; ++j) {
+
+            const VertexShaderOutput *c0 = &clipped[0];
+            const VertexShaderOutput *c1 = &clipped[j];
+            const VertexShaderOutput *c2 = &clipped[j + 1];
+
+            if (setup_triangle(c0, c1, c2)) {
+                rasterize_triangle(fb, c0, c1, c2);
+            }
+        }
     }
 
     free(v_out);
