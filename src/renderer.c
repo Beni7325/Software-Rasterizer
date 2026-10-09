@@ -94,6 +94,29 @@ static vec4s clip_to_screen(const FrameBuffer *fb, vec4s clip) {
     return screen;
 }
 
+enum {
+    FRUSTUM_OUTSIDE_LEFT   = 1 << 0,
+    FRUSTUM_OUTSIDE_RIGHT  = 1 << 1,
+    FRUSTUM_OUTSIDE_BOTTOM = 1 << 2,
+    FRUSTUM_OUTSIDE_TOP    = 1 << 3,
+    FRUSTUM_OUTSIDE_NEAR   = 1 << 4,
+    FRUSTUM_OUTSIDE_FAR    = 1 << 5,
+};
+
+uint8_t frustum_outside_mask(vec4s clip) {
+
+    uint8_t mask = 0;
+
+    if (clip.x < -clip.w) mask |= FRUSTUM_OUTSIDE_LEFT;
+    if (clip.x >  clip.w) mask |= FRUSTUM_OUTSIDE_RIGHT;
+    if (clip.y < -clip.w) mask |= FRUSTUM_OUTSIDE_BOTTOM;
+    if (clip.y >  clip.w) mask |= FRUSTUM_OUTSIDE_TOP;
+    if (clip.z < -clip.w) mask |= FRUSTUM_OUTSIDE_NEAR;
+    if (clip.z >  clip.w) mask |= FRUSTUM_OUTSIDE_FAR;
+
+    return mask;
+}
+
 // Signed distance to the near plane in clip space, >= 0 means inside
 float near_plane_distance(vec4s clip) {
     return clip.w + clip.z;
@@ -169,11 +192,26 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
     // Step one triangle (3 indices) at a time
     for (size_t i = 0; i + 2 < mesh->index_count; i += 3) {
 
+        uint32_t i0 = mesh->index_buffer[i];
+        uint32_t i1 = mesh->index_buffer[i + 1];
+        uint32_t i2 = mesh->index_buffer[i + 2];
+
+        // All three vertices outside the same plane means the whole triangle is, so skip it.
+        // TODO: Masks are recomputed for shared vertices
+        uint8_t mask0 = frustum_outside_mask(v_out[i0].clip);
+        uint8_t mask1 = frustum_outside_mask(v_out[i1].clip);
+        uint8_t mask2 = frustum_outside_mask(v_out[i2].clip);
+
+        uint8_t shared_outside = mask0 & mask1 & mask2;
+        if (shared_outside) {
+            continue;
+        }
+
         // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
         // Reverse the order here so front faces end up with positive screen area
-        const VertexShaderOutput *v0 = &v_out[mesh->index_buffer[i]];
-        const VertexShaderOutput *v1 = &v_out[mesh->index_buffer[i + 2]];
-        const VertexShaderOutput *v2 = &v_out[mesh->index_buffer[i + 1]];
+        const VertexShaderOutput *v0 = &v_out[i0];
+        const VertexShaderOutput *v1 = &v_out[i2];
+        const VertexShaderOutput *v2 = &v_out[i1];
 
         VertexShaderOutput clipped[MAX_CLIPPED_VERTICES];
         int clipped_count = clip_triangle_near(v0, v1, v2, clipped);
