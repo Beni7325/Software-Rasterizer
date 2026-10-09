@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 
 static float edge(vec2s a, vec2s b, vec2s p) {
@@ -77,7 +78,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     }
 }
 
-static vec4s clip_to_screen(const FrameBuffer *fb, vec4s clip) {
+static vec4s clip_to_viewport(const FrameBuffer *fb, vec4s clip) {
 
     float inv_w = 1.0f / clip.w;
     vec3s clip_xyz = glms_vec3(clip);
@@ -117,46 +118,77 @@ uint8_t frustum_outside_mask(vec4s clip) {
     return mask;
 }
 
-// Signed distance to the near plane in clip space, >= 0 means inside
-float near_plane_distance(vec4s clip) {
-    return clip.w + clip.z;
-}
+#define FRUSTUM_PLANE_COUNT 6
 
-// Clipping one plane can add at most one vertex: 3 + 1
-#define MAX_CLIPPED_VERTICES 4
+static const vec4s frustum_planes[FRUSTUM_PLANE_COUNT] = {
+    {{ 1.0f,  0.0f,  0.0f, 1.0f}}, // Left:   w + x >= 0
+    {{-1.0f,  0.0f,  0.0f, 1.0f}}, // Right:  w - x >= 0
+    {{ 0.0f,  1.0f,  0.0f, 1.0f}}, // Bottom: w + y >= 0
+    {{ 0.0f, -1.0f,  0.0f, 1.0f}}, // Top:    w - y >= 0
+    {{ 0.0f,  0.0f,  1.0f, 1.0f}}, // Near:   w + z >= 0
+    {{ 0.0f,  0.0f, -1.0f, 1.0f}}, // Far:    w - z >= 0
+};
 
-// Clips a triangle against the near plane only, in clip space
+#define MAX_CLIPPED_VERTICES (3 + FRUSTUM_PLANE_COUNT)
+
+// Clips a triangle against the frustum planes set in plane_mask, in clip space. Planes the triangle is fully inside of can be left out of the mask to skip them
 // Writes the resulting convex polygon to out and returns its vertex count
-int clip_triangle_near(const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, VertexShaderOutput out[MAX_CLIPPED_VERTICES]) {
+int clip_triangle_to_frustum(const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, unsigned plane_mask, VertexShaderOutput out[MAX_CLIPPED_VERTICES]) {
 
-    const VertexShaderOutput *in[3] = {v0, v1, v2};
-    int out_count = 0;
+    VertexShaderOutput buffer_a[MAX_CLIPPED_VERTICES] = {*v0, *v1, *v2};
+    VertexShaderOutput buffer_b[MAX_CLIPPED_VERTICES];
+    VertexShaderOutput *src = buffer_a;
+    VertexShaderOutput *dst = buffer_b;
+    int src_count = 3;
 
-    for (int i = 0; i < 3; ++i) {
+    for (int plane = 0; plane < FRUSTUM_PLANE_COUNT; ++plane) {
 
-        const VertexShaderOutput *curr = in[i];
-        const VertexShaderOutput *next = in[(i + 1) % 3];
-
-        float d_curr = near_plane_distance(curr->clip);
-        float d_next = near_plane_distance(next->clip);
-
-        if (d_curr >= 0) {
-            out[out_count++] = *curr;
+        // Bit order matches frustum_planes
+        unsigned plane_bit = 1u << plane;
+        if (!(plane_mask & plane_bit)) {
+            continue;
         }
 
-        if ((d_curr >= 0) != (d_next >= 0)) {
-            // Edge crosses the plane, emit the intersection
-            float t = d_curr / (d_curr - d_next);
+        int dst_count = 0;
 
-            VertexShaderOutput intersection;
-            intersection.clip = glms_vec4_lerp(curr->clip, next->clip, t);
-            intersection.v.color = glms_vec3_lerp(curr->v.color, next->v.color, t);
+        for (int i = 0; i < src_count; ++i) {
 
-            out[out_count++] = intersection;
+            VertexShaderOutput *curr = &src[i];
+            VertexShaderOutput *next = &src[(i + 1) % src_count];
+
+            float d_curr = glms_vec4_dot(curr->clip, frustum_planes[plane]);
+            float d_next = glms_vec4_dot(next->clip, frustum_planes[plane]);
+
+            if (d_curr >= 0) {
+                dst[dst_count++] = *curr;
+            }
+
+            if ((d_curr >= 0) != (d_next >= 0)) {
+                // Edge crosses the plane, emit the intersection
+                float t = d_curr / (d_curr - d_next);
+
+                VertexShaderOutput intersection;
+                intersection.clip = glms_vec4_lerp(curr->clip, next->clip, t);
+                intersection.v.color = glms_vec3_lerp(curr->v.color, next->v.color, t);
+
+                dst[dst_count++] = intersection;
+            }
         }
+
+        // Fully outside this plane
+        if (dst_count == 0) {
+            return 0;
+        }
+
+        VertexShaderOutput *tmp = src;
+        src = dst;
+        dst = tmp;
+        src_count = dst_count;
     }
 
-    return out_count;
+    memcpy(out, src, src_count * sizeof(VertexShaderOutput));
+
+    return src_count;
 }
 
 #define DEGENERATE_DOUBLE_AREA 1e-6f
@@ -207,6 +239,9 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
             continue;
         }
 
+        // Only planes crossed by at least one vertex need clipping
+        uint8_t any_outside = mask0 | mask1 | mask2;
+
         // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
         // Reverse the order here so front faces end up with positive screen area
         const VertexShaderOutput *v0 = &v_out[i0];
@@ -214,11 +249,11 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         const VertexShaderOutput *v2 = &v_out[i1];
 
         VertexShaderOutput clipped[MAX_CLIPPED_VERTICES];
-        int clipped_count = clip_triangle_near(v0, v1, v2, clipped);
+        int clipped_count = clip_triangle_to_frustum(v0, v1, v2, any_outside, clipped);
 
         // Clipping creates new vertices, so the divide has to happen after it
         for (int j = 0; j < clipped_count; ++j) {
-            clipped[j].screen = clip_to_screen(fb, clipped[j].clip);
+            clipped[j].screen = clip_to_viewport(fb, clipped[j].clip);
         }
 
         // Fan triangulate the clipped polygon
