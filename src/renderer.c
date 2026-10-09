@@ -21,6 +21,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
 
     float double_area = edge(a, b, c);
+    float inv_double_area = 1.0f / double_area;
 
     mat3s colors = {.col = {v0->v.color, v1->v.color, v2->v.color}};
     vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
@@ -42,23 +43,28 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     ivec2s px_min = {.x = (int)floorf(bb_min.x), .y = (int)floorf(bb_min.y)};
     ivec2s px_max = {.x = (int)ceilf(bb_max.x),  .y = (int)ceilf(bb_max.y)};
 
+    // Edge functions are linear: evaluate them at the top left pixel center, then step per pixel in x and y
+    vec2s p_tl = {.x = px_min.x + 0.5f, .y = px_min.y + 0.5f};
+    vec3s w_tl = {.x = edge(b, c, p_tl), .y = edge(c, a, p_tl), .z = edge(a, b, p_tl)};
+    vec3s w_dx = {.x = b.y - c.y, .y = c.y - a.y, .z = a.y - b.y};
+    vec3s w_dy = {.x = c.x - b.x, .y = a.x - c.x, .z = b.x - a.x};
+
     Varyings interpolated_varyings;
 
     for (int y = px_min.y; y <= px_max.y; ++y) {
+
+        vec3s row_offset = glms_vec3_scale(w_dy, y - px_min.y);
+        vec3s w_row = glms_vec3_add(w_tl, row_offset);
+
         for (int x = px_min.x; x <= px_max.x; ++x) {
 
-            // Sample at pixel center
-            vec2s p = {.x = x + 0.5f, .y = y + 0.5f};
-            vec3s w = {
-                .x = edge(b, c, p),
-                .y = edge(c, a, p),
-                .z = edge(a, b, p),
-            };
+            vec3s col_offset = glms_vec3_scale(w_dx, x - px_min.x);
+            vec3s w = glms_vec3_add(w_row, col_offset);
 
             if (w.x >= 0 && w.y >= 0 && w.z >= 0) {
 
                 // Interpolate depth (NDC depth is affine in screen space)
-                vec3s l = glms_vec3_divs(w, double_area);
+                vec3s l = glms_vec3_scale(w, inv_double_area);
                 float depth = glms_vec3_dot(depths, l);
 
                 int idx = y * fb->width + x;
