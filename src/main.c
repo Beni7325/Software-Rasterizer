@@ -12,6 +12,9 @@
 #define WIDTH  1280
 #define HEIGHT 720
 
+// Seconds between frame time updates in the window title
+#define STATS_INTERVAL 0.5f
+
 
 void sdl_free(SDL_Window *window, SDL_Renderer *renderer, SDL_Texture *texture) {
 
@@ -79,6 +82,12 @@ int main(int argc, char **argv) {
 
     Uint64 last_counter = SDL_GetPerformanceCounter();
 
+    // Frame timings are averaged over a short window and shown in the title
+    float counter_period = 1.0f / SDL_GetPerformanceFrequency();
+    float stats_elapsed = 0.0f;
+    float stats_render_time = 0.0f;
+    int stats_frames = 0;
+
     int running = 1;
     while (running) {
 
@@ -97,13 +106,34 @@ int main(int argc, char **argv) {
         }
 
         Uint64 counter = SDL_GetPerformanceCounter();
-        float dt = (float)(counter - last_counter) / SDL_GetPerformanceFrequency();
+        float dt = (float)(counter - last_counter) * counter_period;
         last_counter = counter;
 
         camera_controller_update(&camera, dt, mouse_delta);
 
+        // Render time excludes the vsync wait
+        Uint64 render_start = SDL_GetPerformanceCounter();
         framebuffer_clear(&fb);
         draw_model(&fb, &model, &camera);
+        Uint64 render_end = SDL_GetPerformanceCounter();
+        float render_time = (float)(render_end - render_start) * counter_period;
+
+        stats_elapsed += dt;
+        stats_render_time += render_time;
+        stats_frames++;
+
+        if (stats_elapsed >= STATS_INTERVAL) {
+            float frame_ms = 1000.0f * stats_elapsed / stats_frames;
+            float render_ms = 1000.0f * stats_render_time / stats_frames;
+
+            char title[128];
+            snprintf(title, sizeof(title), "rasterizer | frame %.2f ms | render %.2f ms", frame_ms, render_ms);
+            SDL_SetWindowTitle(window, title);
+
+            stats_elapsed = 0.0f;
+            stats_render_time = 0.0f;
+            stats_frames = 0;
+        }
 
         SDL_UpdateTexture(texture, NULL, fb.color_buffer, WIDTH * sizeof(uint32_t));
         SDL_RenderClear(renderer);
