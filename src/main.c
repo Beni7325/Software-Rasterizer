@@ -66,10 +66,16 @@ int main(int argc, char **argv) {
 
     Model model = model_create(&mesh);
 
-    vec3s camera_pos = {.x = 0.0f, .y = 0.0f, .z = 3.0f};
+    // Back off along +z until the mesh's bounding cube fits the vertical fov, which is the narrower one for a wide window
+    float fov_y = glm_rad(60.0f);
+    float half_size = 0.5f * NORMALIZED_MESH_SIZE;
+    float fit_distance = half_size / tanf(0.5f * fov_y);
+    float camera_z = half_size + fit_distance;
+
+    vec3s camera_pos = {.x = 0.0f, .y = 0.0f, .z = camera_z};
     vec3s camera_dir = {.x = 0.0f, .y = 0.0f, .z = -1.0f};
     float aspect = (float)WIDTH / HEIGHT;
-    Camera camera = camera_init(camera_pos, camera_dir, glm_rad(60.0f), aspect);
+    Camera camera = camera_init(camera_pos, camera_dir, fov_y, aspect);
 
     Uint64 last_counter = SDL_GetPerformanceCounter();
 

@@ -3,33 +3,25 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include "util.h"
 
-
-static float edge(vec2s a, vec2s b, vec2s p) {
-
-    vec2s ab = glms_vec2_sub(b, a);
-    vec2s ap = glms_vec2_sub(p, a);
-
-    return glms_vec2_cross(ab, ap);
-}
 
 // TODO: Implement top-left rule
-static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2) {
+static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, const Material *material) {
 
     vec2s a = {.x = v0->screen.x, .y = v0->screen.y};
     vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
     vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
 
-    float double_area = edge(a, b, c);
+    float double_area = edge_function(a, b, c);
     float inv_double_area = 1.0f / double_area;
 
-    mat3s normals = {.col = {v0->v.normal, v1->v.normal, v2->v.normal}};
     vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
     vec3s inv_ws = {.x = v0->screen.w, .y = v1->screen.w, .z = v2->screen.w};
 
     // Triangle bounding box
-    vec2s bb_min = glms_vec2_minv(a, glms_vec2_minv(b, c));
-    vec2s bb_max = glms_vec2_maxv(a, glms_vec2_maxv(b, c));
+    vec2s bb_min = min3_vec2(a, b, c);
+    vec2s bb_max = max3_vec2(a, b, c);
 
     // Clamp to the framebuffer
     vec2s screen_min = {.x = 0.0f, .y = 0.0f };
@@ -45,7 +37,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
 
     // Edge functions are linear: evaluate them at the top left pixel center, then step per pixel in x and y
     vec2s p_tl = {.x = px_min.x + 0.5f, .y = px_min.y + 0.5f};
-    vec3s w_tl = {.x = edge(b, c, p_tl), .y = edge(c, a, p_tl), .z = edge(a, b, p_tl)};
+    vec3s w_tl = {.x = edge_function(b, c, p_tl), .y = edge_function(c, a, p_tl), .z = edge_function(a, b, p_tl)};
     vec3s w_dx = {.x = b.y - c.y, .y = c.y - a.y, .z = a.y - b.y};
     vec3s w_dy = {.x = c.x - b.x, .y = a.x - c.x, .z = b.x - a.x};
 
@@ -76,8 +68,8 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
                     float inv_w = glms_vec3_hadd(l_over_w);
                     vec3s l_persp = glms_vec3_divs(l_over_w, inv_w);
 
-                    interpolated_varyings.normal = glms_mat3_mulv(normals, l_persp);
-                    fb->color_buffer[idx] = fragment_shader(&interpolated_varyings);
+                    varyings_interpolate(&v0->v, &v1->v, &v2->v, l_persp, &interpolated_varyings);
+                    fb->color_buffer[idx] = fragment_shader(&interpolated_varyings, material);
                 }
             }
         }
@@ -176,6 +168,7 @@ int clip_triangle_to_frustum(const VertexShaderOutput *v0, const VertexShaderOut
                 VertexShaderOutput intersection;
                 intersection.clip = glms_vec4_lerp(curr->clip, next->clip, t);
                 intersection.v.normal = glms_vec3_lerp(curr->v.normal, next->v.normal, t);
+                intersection.v.uv = glms_vec2_lerp(curr->v.uv, next->v.uv, t);
 
                 dst[dst_count++] = intersection;
             }
@@ -205,7 +198,7 @@ bool setup_triangle(const VertexShaderOutput *v0, const VertexShaderOutput *v1, 
     vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
     vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
 
-    float double_area = edge(a, b, c);
+    float double_area = edge_function(a, b, c);
 
     // Cull back faces (negative area) and degenerate triangles (zero or near zero arear)
     if (double_area < DEGENERATE_DOUBLE_AREA) {
@@ -248,6 +241,10 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         // Only planes crossed by at least one vertex need clipping
         uint8_t any_outside = mask0 | mask1 | mask2;
 
+        // Every triangle the clipper fans out shares the source triangle's material
+        uint32_t material_id = mesh->material_ids[i / 3];
+        const Material *material = &mesh->materials[material_id];
+
         // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
         // Reverse the order here so front faces end up with positive screen area
         const VertexShaderOutput *v0 = &v_out[i0];
@@ -270,7 +267,7 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
             const VertexShaderOutput *c2 = &clipped[j + 1];
 
             if (setup_triangle(c0, c1, c2)) {
-                rasterize_triangle(fb, c0, c1, c2);
+                rasterize_triangle(fb, c0, c1, c2, material);
             }
         }
     }
