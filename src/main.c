@@ -28,10 +28,21 @@ void sdl_free(SDL_Window *window, SDL_Renderer *renderer, SDL_Texture *texture) 
     SDL_Quit();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <model.obj>\n", argv[0]);
+        return 1;
+    }
+
+    Mesh mesh;
+    if (!mesh_load_obj(&mesh, argv[1])) {
+        return 1;
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        mesh_free(&mesh);
         return 1;
     }
 
@@ -41,6 +52,7 @@ int main(void) {
     if (!texture) {
         fprintf(stderr, "setup failed: %s\n", SDL_GetError());
         sdl_free(window, renderer, texture);
+        mesh_free(&mesh);
         return 1;
     }
 
@@ -48,73 +60,11 @@ int main(void) {
     if (!framebuffer_init(&fb, WIDTH, HEIGHT)) {
         fprintf(stderr, "Error initializing the framebuffer: %s\n", SDL_GetError());
         sdl_free(window, renderer, texture);
+        mesh_free(&mesh);
         return 1;
     }
 
-    const vec3s lbf = {.x = -0.5f, .y = -0.5f, .z =  0.5f};
-    const vec3s rbf = {.x =  0.5f, .y = -0.5f, .z =  0.5f};
-    const vec3s rtf = {.x =  0.5f, .y =  0.5f, .z =  0.5f};
-    const vec3s ltf = {.x = -0.5f, .y =  0.5f, .z =  0.5f};
-    const vec3s lbb = {.x = -0.5f, .y = -0.5f, .z = -0.5f};
-    const vec3s rbb = {.x =  0.5f, .y = -0.5f, .z = -0.5f};
-    const vec3s rtb = {.x =  0.5f, .y =  0.5f, .z = -0.5f};
-    const vec3s ltb = {.x = -0.5f, .y =  0.5f, .z = -0.5f};
-
-    const vec3s black   = {.r =   0, .g =   0, .b =   0};
-    const vec3s red     = {.r = 255, .g =   0, .b =   0};
-    const vec3s green   = {.r =   0, .g = 255, .b =   0};
-    const vec3s blue    = {.r =   0, .g =   0, .b = 255};
-    const vec3s yellow  = {.r = 255, .g = 255, .b =   0};
-    const vec3s magenta = {.r = 255, .g =   0, .b = 255};
-    const vec3s cyan    = {.r =   0, .g = 255, .b = 255};
-    const vec3s white   = {.r = 255, .g = 255, .b = 255};
-
-    // One vertex per corner, colored as an RGB cube: x -> red, y -> green, z -> blue.
-    // Corners are shared between faces, so colors blend across each face
-    enum { LBB, RBB, LTB, RTB, LBF, RBF, LTF, RTF };
-
-    const Vertex vertices[] = {
-        [LBB] = {.pos = lbb, .color = black},
-        [RBB] = {.pos = rbb, .color = red},
-        [LTB] = {.pos = ltb, .color = green},
-        [RTB] = {.pos = rtb, .color = yellow},
-        [LBF] = {.pos = lbf, .color = blue},
-        [RBF] = {.pos = rbf, .color = magenta},
-        [LTF] = {.pos = ltf, .color = cyan},
-        [RTF] = {.pos = rtf, .color = white},
-    };
-
-    // Counter clockwise when seen from outside the cube
-    const uint32_t indices[] = {
-        // Front (+z)
-        LBF, RBF, RTF,   LBF, RTF, LTF,
-        // Back (-z)
-        RBB, LBB, LTB,   RBB, LTB, RTB,
-        // Right (+x)
-        RBF, RBB, RTB,   RBF, RTB, RTF,
-        // Left (-x)
-        LBB, LBF, LTF,   LBB, LTF, LTB,
-        // Top (+y)
-        LTF, RTF, RTB,   LTF, RTB, LTB,
-        // Bottom (-y)
-        LBB, RBB, RBF,   LBB, RBF, LBF,
-    };
-
-    Mesh scene = {
-        .vertex_count = sizeof(vertices) / sizeof(vertices[0]),
-        .index_count = sizeof(indices) / sizeof(indices[0]),
-        .vertex_buffer = vertices,
-        .index_buffer = indices,
-    };
-    if (!mesh_validate(&scene)) {
-        framebuffer_free(&fb);
-        sdl_free(window, renderer, texture);
-        return 1;
-    }
-
-    Model model = model_create(&scene);
-    vec3s model_rotation = {.y = glm_rad(45.0f)};
-    model_rotate(&model, model_rotation);
+    Model model = model_create(&mesh);
 
     vec3s camera_pos = {.x = 0.0f, .y = 0.0f, .z = 3.0f};
     vec3s camera_dir = {.x = 0.0f, .y = 0.0f, .z = -1.0f};
@@ -157,6 +107,7 @@ int main(void) {
 
     framebuffer_free(&fb);
     sdl_free(window, renderer, texture);
+    mesh_free(&mesh);
 
     return 0;
 }

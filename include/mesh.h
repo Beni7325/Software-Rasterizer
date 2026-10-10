@@ -16,10 +16,12 @@ typedef struct {
 typedef struct {
     size_t vertex_count;
     size_t index_count;
-    const Vertex *vertex_buffer;
-    const uint32_t *index_buffer;
+    Vertex *vertex_buffer;
+    uint32_t *index_buffer;
 } Mesh;
 
 bool mesh_validate(const Mesh *mesh);
+bool mesh_load_obj(Mesh *mesh, const char *path);
+void mesh_free(Mesh *mesh);
 
 #endif /* MESH_H */

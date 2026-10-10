@@ -25,6 +25,12 @@ target_include_directories(rasterizer PRIVATE ${CMAKE_SOURCE_DIR}/include)
 # cglm is used header-only; SYSTEM suppresses warnings from its headers
 target_include_directories(rasterizer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/vendor/cglm/include)
 
+# tinyobjloader-c and stb are single-header libraries; define the *_IMPLEMENTATION macro in one .c file
+target_include_directories(rasterizer SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/vendor/tinyobjloader-c
+    ${CMAKE_SOURCE_DIR}/vendor/stb
+)
+
 target_link_libraries(rasterizer PRIVATE SDL2::SDL2 m)
 
 target_compile_options(rasterizer PRIVATE
