@@ -23,17 +23,20 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     vec2s bb_min = min3_vec2(a, b, c);
     vec2s bb_max = max3_vec2(a, b, c);
 
+    // Pixels whose center (x + 0.5, y + 0.5) lies inside the box
+    vec2s half_pixel = {.x = 0.5f, .y = 0.5f};
+    vec2s centers_min = glms_vec2_sub(bb_min, half_pixel);
+    vec2s centers_max = glms_vec2_sub(bb_max, half_pixel);
+
+    ivec2s px_min = {.x = (int)ceilf(centers_min.x),  .y = (int)ceilf(centers_min.y)};
+    ivec2s px_max = {.x = (int)floorf(centers_max.x), .y = (int)floorf(centers_max.y)};
+
     // Clamp to the framebuffer
-    vec2s screen_min = {.x = 0.0f, .y = 0.0f };
-    vec2s screen_max = {.x = fb->width - 1.0f, .y = fb->height - 1.0f};
+    ivec2s screen_min = {.x = 0, .y = 0};
+    ivec2s screen_max = {.x = fb->width - 1, .y = fb->height - 1};
 
-    bb_min = glms_vec2_maxv(bb_min, screen_min);
-    bb_max = glms_vec2_minv(bb_max, screen_max);
-
-    // Pixel range covered by the box
-    // TODO: Tighten to pixel centers
-    ivec2s px_min = {.x = (int)floorf(bb_min.x), .y = (int)floorf(bb_min.y)};
-    ivec2s px_max = {.x = (int)ceilf(bb_max.x),  .y = (int)ceilf(bb_max.y)};
+    px_min = glms_ivec2_maxv(px_min, screen_min);
+    px_max = glms_ivec2_minv(px_max, screen_max);
 
     // Edge functions are linear: evaluate them at the top left pixel center, then step per pixel in x and y
     vec2s p_tl = {.x = px_min.x + 0.5f, .y = px_min.y + 0.5f};
