@@ -23,7 +23,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
     float double_area = edge(a, b, c);
     float inv_double_area = 1.0f / double_area;
 
-    mat3s colors = {.col = {v0->v.color, v1->v.color, v2->v.color}};
+    mat3s normals = {.col = {v0->v.normal, v1->v.normal, v2->v.normal}};
     vec3s depths = {.x = v0->screen.z, .y = v1->screen.z, .z = v2->screen.z};
     vec3s inv_ws = {.x = v0->screen.w, .y = v1->screen.w, .z = v2->screen.w};
 
@@ -76,7 +76,7 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
                     float inv_w = glms_vec3_hadd(l_over_w);
                     vec3s l_persp = glms_vec3_divs(l_over_w, inv_w);
 
-                    interpolated_varyings.color = glms_mat3_mulv(colors, l_persp);
+                    interpolated_varyings.normal = glms_mat3_mulv(normals, l_persp);
                     fb->color_buffer[idx] = fragment_shader(&interpolated_varyings);
                 }
             }
@@ -175,7 +175,7 @@ int clip_triangle_to_frustum(const VertexShaderOutput *v0, const VertexShaderOut
 
                 VertexShaderOutput intersection;
                 intersection.clip = glms_vec4_lerp(curr->clip, next->clip, t);
-                intersection.v.color = glms_vec3_lerp(curr->v.color, next->v.color, t);
+                intersection.v.normal = glms_vec3_lerp(curr->v.normal, next->v.normal, t);
 
                 dst[dst_count++] = intersection;
             }

@@ -10,7 +10,7 @@
 
 typedef struct {
     vec3s pos;
-    vec3s color;
+    vec3s normal;
 } Vertex;
 
 typedef struct {

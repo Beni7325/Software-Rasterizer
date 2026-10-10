@@ -7,7 +7,7 @@
 
 
 typedef struct {
-    vec3s color;
+    vec3s normal;
 } Varyings;
 
 typedef struct {

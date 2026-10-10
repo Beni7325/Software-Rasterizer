@@ -88,6 +88,133 @@ static void tinyobj_file_reader(void *ctx, const char *filename, int is_mtl, con
     }
 }
 
+vec3s attrib_vec3(const float *array, int index) {
+    const float *v = &array[3 * index];
+    return (vec3s){.x = v[0], .y = v[1], .z = v[2]};
+}
+
+// Area weighted average of the normals of the faces around each position, for corners with no normal in the file
+void compute_position_normals(const tinyobj_attrib_t *attrib, vec3s *normals) {
+
+    for (size_t i = 0; i < attrib->num_vertices; ++i) {
+        normals[i] = glms_vec3_zero();
+    }
+
+    for (size_t i = 0; i + 2 < attrib->num_faces; i += 3) {
+
+        int i0 = attrib->faces[i].v_idx;
+        int i1 = attrib->faces[i + 1].v_idx;
+        int i2 = attrib->faces[i + 2].v_idx;
+
+        vec3s p0 = attrib_vec3(attrib->vertices, i0);
+        vec3s p1 = attrib_vec3(attrib->vertices, i1);
+        vec3s p2 = attrib_vec3(attrib->vertices, i2);
+
+        // Counter clockwise faces point the cross product outward, and its length is twice the area
+        vec3s e1 = glms_vec3_sub(p1, p0);
+        vec3s e2 = glms_vec3_sub(p2, p0);
+        vec3s face_normal = glms_vec3_cross(e1, e2);
+
+        normals[i0] = glms_vec3_add(normals[i0], face_normal);
+        normals[i1] = glms_vec3_add(normals[i1], face_normal);
+        normals[i2] = glms_vec3_add(normals[i2], face_normal);
+    }
+
+    for (size_t i = 0; i < attrib->num_vertices; ++i) {
+        normals[i] = glms_vec3_normalize(normals[i]);
+    }
+}
+
+// One mesh vertex per unique (position, normal) index pair, found through an open addressing hash table
+typedef struct {
+    int v_idx;  // -1 marks an empty slot
+    int vn_idx; // -1 when the corner uses the computed position normal
+    uint32_t vertex;
+} CornerSlot;
+
+size_t corner_slot(const CornerSlot *slots, size_t capacity, int v_idx, int vn_idx) {
+
+    uint32_t hash = (uint32_t)v_idx * 2654435761u ^ (uint32_t)vn_idx * 2246822519u;
+    size_t slot = hash & (capacity - 1);
+
+    while (slots[slot].v_idx != -1 && (slots[slot].v_idx != v_idx || slots[slot].vn_idx != vn_idx)) {
+        slot = (slot + 1) & (capacity - 1);
+    }
+
+    return slot;
+}
+
+bool build_mesh(Mesh *mesh, const tinyobj_attrib_t *attrib, const char *path) {
+
+    // After triangulation every face has 3 corners, so num_faces counts face corners, one index each
+    size_t corner_count = attrib->num_faces;
+
+    for (size_t i = 0; i < corner_count; ++i) {
+        int v_idx = attrib->faces[i].v_idx;
+        if (v_idx < 0 || (size_t)v_idx >= attrib->num_vertices) {
+            fprintf(stderr, "OBJ '%s' corner %zu has invalid position index %d\n", path, i, v_idx);
+            return false;
+        }
+    }
+
+    // Keep the table at most half full so probes stay short
+    size_t capacity = 1;
+    while (capacity < 2 * corner_count) {
+        capacity *= 2;
+    }
+
+    vec3s *position_normals = malloc(attrib->num_vertices * sizeof(vec3s));
+    CornerSlot *slots = malloc(capacity * sizeof(CornerSlot));
+    mesh->vertex_buffer = malloc(corner_count * sizeof(Vertex)); // Upper bound, every corner unique
+    mesh->index_buffer = malloc(corner_count * sizeof(uint32_t));
+
+    bool ok = position_normals && slots && mesh->vertex_buffer && mesh->index_buffer;
+
+    if (ok) {
+
+        compute_position_normals(attrib, position_normals);
+
+        for (size_t i = 0; i < capacity; ++i) {
+            slots[i].v_idx = -1;
+        }
+
+        for (size_t i = 0; i < corner_count; ++i) {
+
+            int v_idx = attrib->faces[i].v_idx;
+            int vn_idx = attrib->faces[i].vn_idx;
+
+            // Missing normals come back as negative indices
+            bool has_normal = vn_idx >= 0 && (size_t)vn_idx < attrib->num_normals;
+            if (!has_normal) {
+                vn_idx = -1;
+            }
+
+            size_t slot = corner_slot(slots, capacity, v_idx, vn_idx);
+
+            if (slots[slot].v_idx == -1) {
+
+                vec3s pos = attrib_vec3(attrib->vertices, v_idx);
+                vec3s normal = has_normal ? glms_vec3_normalize(attrib_vec3(attrib->normals, vn_idx)) : position_normals[v_idx];
+
+                uint32_t vertex = (uint32_t)mesh->vertex_count++;
+                mesh->vertex_buffer[vertex] = (Vertex){.pos = pos, .normal = normal};
+                slots[slot] = (CornerSlot){.v_idx = v_idx, .vn_idx = vn_idx, .vertex = vertex};
+            }
+
+            mesh->index_buffer[mesh->index_count++] = slots[slot].vertex;
+        }
+
+        ok = mesh_validate(mesh);
+    } else {
+        fprintf(stderr, "Out of memory loading OBJ '%s'\n", path);
+    }
+
+    free(position_normals);
+    free(slots);
+
+    return ok;
+}
+
 bool mesh_load_obj(Mesh *mesh, const char *path) {
 
     *mesh = (Mesh){0};
@@ -111,32 +238,7 @@ bool mesh_load_obj(Mesh *mesh, const char *path) {
         return false;
     }
 
-    // After triangulation every face has 3 corners, so num_faces counts face corners, one index each
-    mesh->vertex_count = attrib.num_vertices;
-    mesh->index_count = attrib.num_faces;
-    mesh->vertex_buffer = malloc(mesh->vertex_count * sizeof(Vertex));
-    mesh->index_buffer = malloc(mesh->index_count * sizeof(uint32_t));
-
-    bool ok = mesh->vertex_buffer && mesh->index_buffer;
-
-    if (ok) {
-
-        vec3s white = {.r = 255, .g = 255, .b = 255};
-
-        for (size_t i = 0; i < mesh->vertex_count; ++i) {
-            float *pos = &attrib.vertices[3 * i];
-            mesh->vertex_buffer[i] = (Vertex){.pos = {.x = pos[0], .y = pos[1], .z = pos[2]}, .color = white};
-        }
-
-        // A missing or out of range index wraps to a huge value and is caught by mesh_validate
-        for (size_t i = 0; i < mesh->index_count; ++i) {
-            mesh->index_buffer[i] = (uint32_t)attrib.faces[i].v_idx;
-        }
-
-        ok = mesh_validate(mesh);
-    } else {
-        fprintf(stderr, "Out of memory loading OBJ '%s'\n", path);
-    }
+    bool ok = build_mesh(mesh, &attrib, path);
 
     tinyobj_attrib_free(&attrib);
     tinyobj_shapes_free(shapes, shape_count);
