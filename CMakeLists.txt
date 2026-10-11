@@ -42,3 +42,12 @@ target_compile_options(rasterizer PRIVATE
 target_link_options(rasterizer PRIVATE
     $<$<CONFIG:Debug>:-fsanitize=address,undefined>
 )
+
+# LTO in Release so small hot functions can be inlined across source files
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error LANGUAGES C)
+if(ipo_supported)
+    set_property(TARGET rasterizer PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+else()
+    message(WARNING "LTO not supported: ${ipo_error}")
+endif()

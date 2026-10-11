@@ -3,11 +3,12 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tile.h"
 #include "util.h"
 
 
 // TODO: Implement top-left rule
-static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, const Material *material) {
+static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, const VertexShaderOutput *v1, const VertexShaderOutput *v2, const Material *material, ivec2s tile_min, ivec2s tile_max) {
 
     vec2s a = {.x = v0->screen.x, .y = v0->screen.y};
     vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
@@ -37,6 +38,10 @@ static void rasterize_triangle(FrameBuffer *fb, const VertexShaderOutput *v0, co
 
     px_min = glms_ivec2_maxv(px_min, screen_min);
     px_max = glms_ivec2_minv(px_max, screen_max);
+
+    // Clamp to the tile being rasterized
+    px_min = glms_ivec2_maxv(px_min, tile_min);
+    px_max = glms_ivec2_minv(px_max, tile_max);
 
     // Edge functions are linear: evaluate them at the top left pixel center, then step per pixel in x and y
     vec2s p_tl = {.x = px_min.x + 0.5f, .y = px_min.y + 0.5f};
@@ -150,6 +155,15 @@ int clip_triangle_to_frustum(const VertexShaderOutput *v0, const VertexShaderOut
             continue;
         }
 
+        // Side planes are pushed out to a guard band of 8w, the rasterizer's bbox clamp handles the off screen parts inside of it.
+        // Past it screen coordinates get too large for float edge functions. Near and far stay on the real frustum
+        const float guard_band_scale = 8.0f;
+        unsigned side_bits = FRUSTUM_OUTSIDE_LEFT | FRUSTUM_OUTSIDE_RIGHT | FRUSTUM_OUTSIDE_BOTTOM | FRUSTUM_OUTSIDE_TOP;
+        vec4s clip_plane = frustum_planes[plane];
+        if (plane_bit & side_bits) {
+            clip_plane.w = guard_band_scale;
+        }
+
         int dst_count = 0;
 
         for (int i = 0; i < src_count; ++i) {
@@ -157,8 +171,8 @@ int clip_triangle_to_frustum(const VertexShaderOutput *v0, const VertexShaderOut
             VertexShaderOutput *curr = &src[i];
             VertexShaderOutput *next = &src[(i + 1) % src_count];
 
-            float d_curr = glms_vec4_dot(curr->clip, frustum_planes[plane]);
-            float d_next = glms_vec4_dot(next->clip, frustum_planes[plane]);
+            float d_curr = glms_vec4_dot(curr->clip, clip_plane);
+            float d_next = glms_vec4_dot(next->clip, clip_plane);
 
             if (d_curr >= 0) {
                 dst[dst_count++] = *curr;
@@ -213,14 +227,33 @@ bool setup_triangle(const VertexShaderOutput *v0, const VertexShaderOutput *v1, 
 
 void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
 
+    // Triangle ids below this are the mesh's triangles, the rest are clip triangle id - mesh_triangle_count
+    size_t mesh_triangle_count = mesh->index_count / 3;
+
+    // Clipped polygons go in their own vertex buffer, 50% of the shaded vertices covers the clipping seen in tests.
+    // The new triangles created after clipping go in clip_index_buffer (3 indices into clip_v_out each) and clip_material_ids (1 each).
+    size_t clip_capacity = mesh->vertex_count / 2;
+    size_t clip_vertex_count = 0;
+    size_t clip_triangle_count = 0;
+
     // TODO: Use some kind of arena to avoid calling malloc each time
     VertexShaderOutput *v_out = malloc(sizeof(VertexShaderOutput) * mesh->vertex_count);
-    if (!v_out) {
+    VertexShaderOutput *clip_v_out = malloc(sizeof(VertexShaderOutput) * clip_capacity);
+    uint32_t *clip_index_buffer = malloc(sizeof(uint32_t) * 3 * clip_capacity);
+    uint32_t *clip_material_ids = malloc(sizeof(uint32_t) * clip_capacity);
+    TileBins tile_bins = {0};
+    if (!v_out || !clip_v_out || !clip_index_buffer || !clip_material_ids || !tile_bins_init(&tile_bins, fb->width, fb->height)) {
+        free(v_out);
+        free(clip_v_out);
+        free(clip_index_buffer);
+        free(clip_material_ids);
+        tile_bins_free(&tile_bins);
         return;
     }
 
     for (size_t i = 0; i < mesh->vertex_count; ++i) {
         vertex_shader(&mesh->vertex_buffer[i], uniforms, &v_out[i]);
+        v_out[i].screen = clip_to_viewport(fb, v_out[i].clip);
     }
 
     // Step one triangle (3 indices) at a time
@@ -245,8 +278,8 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         uint8_t any_outside = mask0 | mask1 | mask2;
 
         // Every triangle the clipper fans out shares the source triangle's material
-        uint32_t material_id = mesh->material_ids[i / 3];
-        const Material *material = &mesh->materials[material_id];
+        uint32_t triangle_id = (uint32_t)(i / 3);
+        uint32_t material_id = mesh->material_ids[triangle_id];
 
         // Front faces are counter clock wise in NDC but the viewport y flip makes them clock wise on screen
         // Reverse the order here so front faces end up with positive screen area
@@ -254,8 +287,29 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         const VertexShaderOutput *v1 = &v_out[i2];
         const VertexShaderOutput *v2 = &v_out[i1];
 
-        VertexShaderOutput clipped[MAX_CLIPPED_VERTICES];
+        // Fully inside, the vertices are already in screen space so use them in place
+        if (!any_outside) {
+            if (setup_triangle(v0, v1, v2)) {
+                vec2s a = {.x = v0->screen.x, .y = v0->screen.y};
+                vec2s b = {.x = v1->screen.x, .y = v1->screen.y};
+                vec2s c = {.x = v2->screen.x, .y = v2->screen.y};
+
+                bin_triangle(&tile_bins, a, b, c, triangle_id);
+            }
+            continue;
+        }
+
+        // The clipper writes the whole polygon, kept vertices included, so it can need up to MAX_CLIPPED_VERTICES slots.
+        // TODO: In our testing the clip buffers are big enough, triangles that don't fit are dropped for now and will be handled later
+        if (clip_capacity - clip_vertex_count < MAX_CLIPPED_VERTICES) {
+            continue;
+        }
+
+        uint32_t polygon_start = (uint32_t)clip_vertex_count;
+        VertexShaderOutput *clipped = &clip_v_out[polygon_start];
+
         int clipped_count = clip_triangle_to_frustum(v0, v1, v2, any_outside, clipped);
+        clip_vertex_count += clipped_count;
 
         // Clipping creates new vertices, so the divide has to happen after it
         for (int j = 0; j < clipped_count; ++j) {
@@ -265,16 +319,76 @@ void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms) {
         // Fan triangulate the clipped polygon
         for (int j = 1; j + 1 < clipped_count; ++j) {
 
-            const VertexShaderOutput *c0 = &clipped[0];
-            const VertexShaderOutput *c1 = &clipped[j];
-            const VertexShaderOutput *c2 = &clipped[j + 1];
+            uint32_t c0_index = polygon_start;
+            uint32_t c1_index = polygon_start + j;
+            uint32_t c2_index = polygon_start + j + 1;
+
+            const VertexShaderOutput *c0 = &clip_v_out[c0_index];
+            const VertexShaderOutput *c1 = &clip_v_out[c1_index];
+            const VertexShaderOutput *c2 = &clip_v_out[c2_index];
 
             if (setup_triangle(c0, c1, c2)) {
-                rasterize_triangle(fb, c0, c1, c2, material);
+                clip_index_buffer[3 * clip_triangle_count] = c0_index;
+                clip_index_buffer[3 * clip_triangle_count + 1] = c2_index;
+                clip_index_buffer[3 * clip_triangle_count + 2] = c1_index;
+                clip_material_ids[clip_triangle_count] = material_id;
+
+                uint32_t clip_triangle_id = (uint32_t)(mesh_triangle_count + clip_triangle_count);
+                clip_triangle_count++;
+
+                vec2s a = {.x = c0->screen.x, .y = c0->screen.y};
+                vec2s b = {.x = c1->screen.x, .y = c1->screen.y};
+                vec2s c = {.x = c2->screen.x, .y = c2->screen.y};
+
+                bin_triangle(&tile_bins, a, b, c, clip_triangle_id);
             }
         }
     }
 
+    for (int ty = 0; ty < tile_bins.tiles.y; ++ty) {
+        for (int tx = 0; tx < tile_bins.tiles.x; ++tx) {
+
+            ivec2s tile_min = {.x = tx * TILE_SIZE, .y = ty * TILE_SIZE};
+            ivec2s tile_max = {.x = tile_min.x + TILE_SIZE - 1, .y = tile_min.y + TILE_SIZE - 1};
+
+            const BinChunk *chunk = tile_bins.bins[ty * tile_bins.tiles.x + tx];
+
+            for (; chunk; chunk = chunk->next) {
+                for (uint32_t k = 0; k < chunk->count; ++k) {
+
+                    uint32_t triangle_id = chunk->triangle_ids[k];
+
+                    // Past the mesh's triangles the indices and vertices are in the clip buffers
+                    const uint32_t *indices;
+                    const VertexShaderOutput *vertices;
+                    uint32_t material_id;
+                    if (triangle_id < mesh_triangle_count) {
+                        indices = &mesh->index_buffer[3 * triangle_id];
+                        vertices = v_out;
+                        material_id = mesh->material_ids[triangle_id];
+                    } else {
+                        uint32_t clip_triangle = triangle_id - mesh_triangle_count;
+                        indices = &clip_index_buffer[3 * clip_triangle];
+                        vertices = clip_v_out;
+                        material_id = clip_material_ids[clip_triangle];
+                    }
+
+                    // Same winding swap as when the triangle was binned
+                    const VertexShaderOutput *v0 = &vertices[indices[0]];
+                    const VertexShaderOutput *v1 = &vertices[indices[2]];
+                    const VertexShaderOutput *v2 = &vertices[indices[1]];
+                    const Material *material = &mesh->materials[material_id];
+
+                    rasterize_triangle(fb, v0, v1, v2, material, tile_min, tile_max);
+                }
+            }
+        }
+    }
+
+    tile_bins_free(&tile_bins);
+    free(clip_material_ids);
+    free(clip_index_buffer);
+    free(clip_v_out);
     free(v_out);
 }
 

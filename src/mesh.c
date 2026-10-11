@@ -285,7 +285,7 @@ bool mesh_load_obj(Mesh *mesh, const char *path) {
 
     *mesh = (Mesh){0};
 
-    tinyobj_attrib_t attrib;
+    tinyobj_attrib_t attrib = {0};
     tinyobj_shape_t *shapes = NULL;
     size_t shape_count = 0;
     tinyobj_material_t *materials = NULL;

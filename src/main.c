@@ -8,6 +8,7 @@
 #include "mesh.h"
 #include "model.h"
 #include "renderer.h"
+#include "tile.h"
 
 #define WIDTH  1280
 #define HEIGHT 720
@@ -43,15 +44,19 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Round up to whole tiles so no tile hangs off the edge of the framebuffer
+    int width = (WIDTH + TILE_SIZE - 1) / TILE_SIZE * TILE_SIZE;
+    int height = (HEIGHT + TILE_SIZE - 1) / TILE_SIZE * TILE_SIZE;
+
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         mesh_free(&mesh);
         return 1;
     }
 
-    SDL_Window *window = SDL_CreateWindow("rasterizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, 0);
+    SDL_Window *window = SDL_CreateWindow("rasterizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, 0);
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC) : NULL;
-    SDL_Texture *texture = renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT) : NULL;
+    SDL_Texture *texture = renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, width, height) : NULL;
     if (!texture) {
         fprintf(stderr, "setup failed: %s\n", SDL_GetError());
         sdl_free(window, renderer, texture);
@@ -60,7 +65,7 @@ int main(int argc, char **argv) {
     }
 
     FrameBuffer fb = {0};
-    if (!framebuffer_init(&fb, WIDTH, HEIGHT)) {
+    if (!framebuffer_init(&fb, width, height)) {
         fprintf(stderr, "Error initializing the framebuffer: %s\n", SDL_GetError());
         sdl_free(window, renderer, texture);
         mesh_free(&mesh);
@@ -77,7 +82,7 @@ int main(int argc, char **argv) {
 
     vec3s camera_pos = {.x = 0.0f, .y = 0.0f, .z = camera_z};
     vec3s camera_dir = {.x = 0.0f, .y = 0.0f, .z = -1.0f};
-    float aspect = (float)WIDTH / HEIGHT;
+    float aspect = (float)width / height;
     Camera camera = camera_init(camera_pos, camera_dir, fov_y, aspect);
 
     Uint64 last_counter = SDL_GetPerformanceCounter();
@@ -135,7 +140,7 @@ int main(int argc, char **argv) {
             stats_frames = 0;
         }
 
-        SDL_UpdateTexture(texture, NULL, fb.color_buffer, WIDTH * sizeof(uint32_t));
+        SDL_UpdateTexture(texture, NULL, fb.color_buffer, width * sizeof(uint32_t));
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
