@@ -5,6 +5,11 @@
 #include <string.h>
 
 
+void *alloc_cache_aligned(size_t size) {
+    size_t aligned_size = (size + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE * CACHE_LINE_SIZE;
+    return aligned_alloc(CACHE_LINE_SIZE, aligned_size);
+}
+
 char *read_file(const char *path, size_t *len) {
 
     FILE *file = fopen(path, "rb");

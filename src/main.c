@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <SDL2/SDL.h>
 
 #include "camera.h"
@@ -72,6 +73,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    ThreadPool pool;
+    if (!thread_pool_init(&pool, SDL_GetCPUCount())) {
+        fprintf(stderr, "Error initializing the thread pool\n");
+        exit(1);
+    }
+
     Model model = model_create(&mesh);
 
     // Back off along +z until the mesh's bounding cube fits the vertical fov, which is the narrower one for a wide window
@@ -119,7 +126,7 @@ int main(int argc, char **argv) {
         // Render time excludes the vsync wait
         Uint64 render_start = SDL_GetPerformanceCounter();
         framebuffer_clear(&fb);
-        draw_model(&fb, &model, &camera);
+        draw_model(&fb, &model, &camera, &pool);
         Uint64 render_end = SDL_GetPerformanceCounter();
         float render_time = (float)(render_end - render_start) * counter_period;
 
@@ -146,6 +153,7 @@ int main(int argc, char **argv) {
         SDL_RenderPresent(renderer);
     }
 
+    thread_pool_free(&pool);
     framebuffer_free(&fb);
     sdl_free(window, renderer, texture);
     mesh_free(&mesh);

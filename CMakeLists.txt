@@ -15,6 +15,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(SDL2 REQUIRED)
+find_package(Threads REQUIRED)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c)
 
@@ -31,7 +32,10 @@ target_include_directories(rasterizer SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/vendor/stb
 )
 
-target_link_libraries(rasterizer PRIVATE SDL2::SDL2 m)
+target_link_libraries(rasterizer PRIVATE SDL2::SDL2 Threads::Threads m)
+
+# Strict C11 hides POSIX APIs such as pthread barriers
+target_compile_definitions(rasterizer PRIVATE _POSIX_C_SOURCE=200809L)
 
 target_compile_options(rasterizer PRIVATE
     -Wall -Wextra -Wpedantic

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <cglm/struct.h>
 
+#define CACHE_LINE_SIZE 64
 
 // a * weights.x + b * weights.y + c * weights.z, e.g. barycentric interpolation of a per vertex value
 static inline vec3s weighted_sum_vec3(vec3s a, vec3s b, vec3s c, vec3s weights) {
@@ -88,6 +89,9 @@ static inline size_t next_pow2(size_t n) {
 static inline uint32_t rgba(vec3s color) {
     return ((uint32_t)color.r << 24) | ((uint32_t)color.g << 16) | ((uint32_t)color.b << 8) | 255;
 }
+
+// aligned_alloc on a cache line boundary, rounding size up to a multiple of the alignment as aligned_alloc requires
+void *alloc_cache_aligned(size_t size);
 
 // Reads a whole file into a malloc'd buffer (not null terminated). Returns NULL on failure or an empty file
 char *read_file(const char *path, size_t *len);

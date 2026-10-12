@@ -6,9 +6,10 @@
 #include "mesh.h"
 #include "model.h"
 #include "shader.h"
+#include "thread_pool.h"
 
 
-void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms);
-void draw_model(FrameBuffer *fb, const Model *model, const Camera *camera);
+void draw_mesh(FrameBuffer *fb, const Mesh *mesh, const Uniforms *uniforms, ThreadPool *pool);
+void draw_model(FrameBuffer *fb, const Model *model, const Camera *camera, ThreadPool *pool);
 
 #endif /* RENDERER_H */

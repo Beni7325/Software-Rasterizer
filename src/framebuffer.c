@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "util.h"
 
 
 bool framebuffer_init(FrameBuffer *fb, size_t width, size_t height) {
@@ -10,9 +11,11 @@ bool framebuffer_init(FrameBuffer *fb, size_t width, size_t height) {
         return false;
     }
 
+    // Cache line aligned so with a tile aligned width each tile row covers whole cache lines,
+    // and threads rasterizing neighbouring tiles never write to the same line
     size_t pixel_count = width * height;
-    fb->color_buffer = malloc(sizeof(*fb->color_buffer) * pixel_count);
-    fb->depth_buffer = malloc(sizeof(*fb->depth_buffer) * pixel_count);
+    fb->color_buffer = alloc_cache_aligned(sizeof(*fb->color_buffer) * pixel_count);
+    fb->depth_buffer = alloc_cache_aligned(sizeof(*fb->depth_buffer) * pixel_count);
 
     if (!fb->color_buffer || !fb->depth_buffer) {
         free(fb->color_buffer);
